@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  check:
+    name: Run ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - lint
+          - type
+          - type-tests
+          - docstrings
+          - pkg
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install tox
+        run: >-
+          uv tool install tox
+          --python-preference only-managed
+          --python 3.13
+          --with tox-uv
+
+      - name: Setup check suite
+        run: >-
+          tox run
+          --notest
+          --skip-missing-interpreters false
+          -e ${{ matrix.env }}
+
+      - name: Run check suite
+        run: >-
+          tox run
+          --skip-pkg-install
+          -e ${{ matrix.env }}
+
+  tests:
+    name: Run tests under ${{ matrix.python_version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python_version:
+          - "3.13"
+          - "3.12"
+          - "3.11"
+          - "3.10"
+          - "3.9"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install tox
+        run: >-
+          uv tool install tox
+          --python-preference only-managed
+          --python 3.13
+          --with tox-uv
+
+      - name: Setup test suite
+        run: >-
+          tox run
+          --notest
+          --skip-missing-interpreters false
+          -e ${{ matrix.python_version }}
+
+      - name: Run test suite
+        run: >-
+          tox run
+          --skip-pkg-install
+          -e ${{ matrix.python_version }}
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-${{ matrix.python_version }}
+          path: .coverage.*
+          include-hidden-files: true
+
+  coverage:
+    name: Combine and check coverage
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          patterns: coverage-data-*
+          merge-multiple: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Combine coverage data
+        run: >-
+          uv run
+          --only-group coverage
+          coverage combine
+
+      - name: Create an HTML report
+        run: >-
+          uv run
+          --only-group coverage
+          coverage html
+
+      - name: Check coverage
+        run: >-
+          uv run
+          --only-group coverage
+          coverage report
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report
+          path: htmlcov
+        if: ${{ failure() }}
